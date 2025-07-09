@@ -1,0 +1,363 @@
+// Mock database implementation for browser environment
+// In production, this would be replaced with actual database calls
+
+export interface User {
+  user_id: number
+  name: string
+  email: string
+  password: string
+  created_at: string
+}
+
+export interface Role {
+  role_id: number
+  name: string
+  description: string
+  created_at: string
+}
+
+export interface Privilege {
+  privilege_id: number
+  name: string
+  description: string
+  created_at: string
+}
+
+export interface UserRole {
+  user_id: number
+  role_id: number
+  assigned_at: string
+}
+
+export interface RolePrivilege {
+  role_id: number
+  privilege_id: number
+  assigned_at: string
+}
+
+// Mock data storage
+let mockUsers: User[] = [
+  {
+    user_id: 1,
+    name: "System Admin",
+    email: "admin@platform.com",
+    password: "admin123",
+    created_at: new Date().toISOString(),
+  },
+]
+
+let mockRoles: Role[] = [
+  {
+    role_id: 1,
+    name: "Admin",
+    description: "Full system access and user management",
+    created_at: new Date().toISOString(),
+  },
+  {
+    role_id: 2,
+    name: "Client",
+    description: "Can post projects and manage applications",
+    created_at: new Date().toISOString(),
+  },
+  {
+    role_id: 3,
+    name: "Freelancer",
+    description: "Can apply to projects and manage profile",
+    created_at: new Date().toISOString(),
+  },
+  {
+    role_id: 4,
+    name: "Moderator",
+    description: "Can review reports and resolve disputes",
+    created_at: new Date().toISOString(),
+  },
+]
+
+const mockPrivileges: Privilege[] = [
+  {
+    privilege_id: 1,
+    name: "manage_users",
+    description: "Create, edit, and delete users",
+    created_at: new Date().toISOString(),
+  },
+  {
+    privilege_id: 2,
+    name: "assign_roles",
+    description: "Assign and remove user roles",
+    created_at: new Date().toISOString(),
+  },
+  {
+    privilege_id: 3,
+    name: "create_project",
+    description: "Create new projects",
+    created_at: new Date().toISOString(),
+  },
+  {
+    privilege_id: 4,
+    name: "view_applications",
+    description: "View project applications",
+    created_at: new Date().toISOString(),
+  },
+  {
+    privilege_id: 5,
+    name: "apply_project",
+    description: "Apply to projects",
+    created_at: new Date().toISOString(),
+  },
+  {
+    privilege_id: 6,
+    name: "review_reports",
+    description: "Review and handle user reports",
+    created_at: new Date().toISOString(),
+  },
+  {
+    privilege_id: 7,
+    name: "manage_roles",
+    description: "Create and edit roles",
+    created_at: new Date().toISOString(),
+  },
+  {
+    privilege_id: 8,
+    name: "manage_privileges",
+    description: "Assign privileges to roles",
+    created_at: new Date().toISOString(),
+  },
+]
+
+let mockUserRoles: UserRole[] = [
+  {
+    user_id: 1,
+    role_id: 1,
+    assigned_at: new Date().toISOString(),
+  },
+]
+
+let mockRolePrivileges: RolePrivilege[] = [
+  // Admin privileges
+  { role_id: 1, privilege_id: 1, assigned_at: new Date().toISOString() },
+  { role_id: 1, privilege_id: 2, assigned_at: new Date().toISOString() },
+  { role_id: 1, privilege_id: 7, assigned_at: new Date().toISOString() },
+  { role_id: 1, privilege_id: 8, assigned_at: new Date().toISOString() },
+  // Client privileges
+  { role_id: 2, privilege_id: 3, assigned_at: new Date().toISOString() },
+  { role_id: 2, privilege_id: 4, assigned_at: new Date().toISOString() },
+  // Freelancer privileges
+  { role_id: 3, privilege_id: 5, assigned_at: new Date().toISOString() },
+  // Moderator privileges
+  { role_id: 4, privilege_id: 6, assigned_at: new Date().toISOString() },
+]
+
+// Auto-increment counters
+let nextUserId = 2
+let nextRoleId = 5
+let nextPrivilegeId = 9
+
+export const db = {
+  // Initialize (no-op for mock)
+  init: async () => {
+    console.log("🚀 Mock database initialized")
+    return true
+  },
+
+  // Users
+  getUsers: async (): Promise<User[]> => {
+    return [...mockUsers]
+  },
+
+  getUserById: async (id: number): Promise<User | null> => {
+    return mockUsers.find((user) => user.user_id === id) || null
+  },
+
+  getUserByEmail: async (email: string): Promise<User | null> => {
+    return mockUsers.find((user) => user.email === email) || null
+  },
+
+  createUser: async (user: Omit<User, "user_id" | "created_at">): Promise<User> => {
+    // Check if user already exists
+    const existingUser = await db.getUserByEmail(user.email)
+    if (existingUser) {
+      throw new Error("User with this email already exists")
+    }
+
+    const newUser: User = {
+      user_id: nextUserId++,
+      name: user.name,
+      email: user.email,
+      password: user.password,
+      created_at: new Date().toISOString(),
+    }
+
+    mockUsers.push(newUser)
+    return newUser
+  },
+
+  updateUser: async (id: number, updates: Partial<User>): Promise<User | null> => {
+    const userIndex = mockUsers.findIndex((user) => user.user_id === id)
+    if (userIndex === -1) return null
+
+    mockUsers[userIndex] = { ...mockUsers[userIndex], ...updates }
+    return mockUsers[userIndex]
+  },
+
+  deleteUser: async (id: number): Promise<void> => {
+    // Remove user roles first
+    mockUserRoles = mockUserRoles.filter((ur) => ur.user_id !== id)
+    // Remove user
+    mockUsers = mockUsers.filter((user) => user.user_id !== id)
+  },
+
+  // Roles
+  getRoles: async (): Promise<Role[]> => {
+    return [...mockRoles]
+  },
+
+  getRoleById: async (id: number): Promise<Role | null> => {
+    return mockRoles.find((role) => role.role_id === id) || null
+  },
+
+  createRole: async (role: Omit<Role, "role_id" | "created_at">): Promise<Role> => {
+    const newRole: Role = {
+      role_id: nextRoleId++,
+      name: role.name,
+      description: role.description,
+      created_at: new Date().toISOString(),
+    }
+
+    mockRoles.push(newRole)
+    return newRole
+  },
+
+  updateRole: async (id: number, updates: Partial<Role>): Promise<Role | null> => {
+    const roleIndex = mockRoles.findIndex((role) => role.role_id === id)
+    if (roleIndex === -1) return null
+
+    mockRoles[roleIndex] = { ...mockRoles[roleIndex], ...updates }
+    return mockRoles[roleIndex]
+  },
+
+  deleteRole: async (id: number): Promise<void> => {
+    // Remove role privileges first
+    mockRolePrivileges = mockRolePrivileges.filter((rp) => rp.role_id !== id)
+    // Remove user roles
+    mockUserRoles = mockUserRoles.filter((ur) => ur.role_id !== id)
+    // Remove role
+    mockRoles = mockRoles.filter((role) => role.role_id !== id)
+  },
+
+  // Privileges
+  getPrivileges: async (): Promise<Privilege[]> => {
+    return [...mockPrivileges]
+  },
+
+  getPrivilegeById: async (id: number): Promise<Privilege | null> => {
+    return mockPrivileges.find((privilege) => privilege.privilege_id === id) || null
+  },
+
+  createPrivilege: async (privilege: Omit<Privilege, "privilege_id" | "created_at">): Promise<Privilege> => {
+    const newPrivilege: Privilege = {
+      privilege_id: nextPrivilegeId++,
+      name: privilege.name,
+      description: privilege.description,
+      created_at: new Date().toISOString(),
+    }
+
+    mockPrivileges.push(newPrivilege)
+    return newPrivilege
+  },
+
+  // User Roles
+  getUserRoles: async (userId: number): Promise<UserRole[]> => {
+    return mockUserRoles.filter((ur) => ur.user_id === userId)
+  },
+
+  assignRole: async (userId: number, roleId: number): Promise<void> => {
+    // Remove existing assignment if any
+    mockUserRoles = mockUserRoles.filter((ur) => !(ur.user_id === userId && ur.role_id === roleId))
+
+    // Add new assignment
+    mockUserRoles.push({
+      user_id: userId,
+      role_id: roleId,
+      assigned_at: new Date().toISOString(),
+    })
+  },
+
+  removeRole: async (userId: number, roleId: number): Promise<void> => {
+    mockUserRoles = mockUserRoles.filter((ur) => !(ur.user_id === userId && ur.role_id === roleId))
+  },
+
+  // Role Privileges
+  getRolePrivileges: async (roleId: number): Promise<RolePrivilege[]> => {
+    return mockRolePrivileges.filter((rp) => rp.role_id === roleId)
+  },
+
+  assignPrivilege: async (roleId: number, privilegeId: number): Promise<void> => {
+    // Remove existing assignment if any
+    mockRolePrivileges = mockRolePrivileges.filter((rp) => !(rp.role_id === roleId && rp.privilege_id === privilegeId))
+
+    // Add new assignment
+    mockRolePrivileges.push({
+      role_id: roleId,
+      privilege_id: privilegeId,
+      assigned_at: new Date().toISOString(),
+    })
+  },
+
+  removePrivilege: async (roleId: number, privilegeId: number): Promise<void> => {
+    mockRolePrivileges = mockRolePrivileges.filter((rp) => !(rp.role_id === roleId && rp.privilege_id === privilegeId))
+  },
+
+  // Check user privileges
+  hasPrivilege: async (userId: number, privilegeName: string): Promise<boolean> => {
+    const userRoles = await db.getUserRoles(userId)
+    const userRoleIds = userRoles.map((ur) => ur.role_id)
+
+    for (const roleId of userRoleIds) {
+      const rolePrivileges = await db.getRolePrivileges(roleId)
+      for (const rp of rolePrivileges) {
+        const privilege = await db.getPrivilegeById(rp.privilege_id)
+        if (privilege && privilege.name === privilegeName) {
+          return true
+        }
+      }
+    }
+
+    return false
+  },
+
+  // Get user with roles and privileges
+  getUserWithRolesAndPrivileges: async (userId: number) => {
+    const user = await db.getUserById(userId)
+    if (!user) return null
+
+    const userRoles = await db.getUserRoles(userId)
+    const userRoleIds = userRoles.map((ur) => ur.role_id)
+
+    const roles = []
+    const privilegeIds = new Set<number>()
+
+    for (const roleId of userRoleIds) {
+      const role = await db.getRoleById(roleId)
+      if (role) {
+        roles.push(role)
+
+        const rolePrivileges = await db.getRolePrivileges(roleId)
+        rolePrivileges.forEach((rp) => privilegeIds.add(rp.privilege_id))
+      }
+    }
+
+    const privileges = []
+    for (const privilegeId of privilegeIds) {
+      const privilege = await db.getPrivilegeById(privilegeId)
+      if (privilege) {
+        privileges.push(privilege)
+      }
+    }
+
+    return {
+      ...user,
+      roles,
+      privileges,
+    }
+  },
+}
