@@ -28,13 +28,66 @@ export interface Privilege {
   description: string;
   privilege_type: 'DATABASE' | 'TABLE' | 'COLUMN' | 'ROUTINE';
   target_object?: string;
+  target_database?: string;
+  target_table?: string;
+  mysql_privilege?: string;
+  is_global: boolean;
   created_at: string;
 }
 
-export interface DatabaseUserRole {
+export interface DatabaseObject {
+  object_id: number;
+  object_type: 'DATABASE' | 'TABLE';
+  database_name: string;
+  table_name?: string;
+  description?: string;
+  created_at: string;
+}
+
+export interface UserSpecificPrivilege {
+  user_privilege_id: number;
+  db_user_id: number;
+  privilege_type: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'DROP' | 'ALTER' | 'INDEX' | 'GRANT';
+  target_database: string;
+  target_table?: string;
+  granted_at: string;
+  granted_by: string;
+}
+
+export interface ScopedRoleAssignment {
+  user_role_id: number;
   db_user_id: number;
   role_id: number;
+  role_name: string;
+  scope_type: 'GLOBAL' | 'DATABASE' | 'TABLE';
+  target_database?: string;
+  target_table?: string;
   assigned_at: string;
+  assigned_by: string;
+  is_active: boolean;
+}
+
+export interface EffectivePrivilege {
+  privilege_name: string;
+  mysql_privilege: string;
+  privilege_type: string;
+  effective_scope: string;
+  source: 'role' | 'direct';
+  role_name?: string;
+  target_database?: string;
+  target_table?: string;
+}
+
+export interface DatabaseUserRole {
+  user_role_id: number;
+  db_user_id: number;
+  role_id: number;
+  scope_type: 'GLOBAL' | 'DATABASE' | 'TABLE';
+  target_database?: string;
+  target_table?: string;
+  assigned_at: string;
+  assigned_by: string;
+  is_active: boolean;
 }
 
 export interface RolePrivilege {
@@ -365,11 +418,28 @@ export const serverDb = {
     }
   },
 
-  async createPrivilege(privilegeData: { name: string; description?: string }): Promise<Privilege> {
+  async createPrivilege(privilegeData: { 
+    name: string; 
+    description?: string;
+    privilege_type?: string;
+    target_database?: string;
+    target_table?: string;
+    mysql_privilege?: string;
+    is_global?: boolean;
+  }): Promise<Privilege> {
     try {
       const [result] = await pool.execute<ResultSetHeader>(
-        'INSERT INTO Privileges (name, description) VALUES (?, ?)',
-        [privilegeData.name, privilegeData.description || '']
+        `INSERT INTO Privileges (name, description, privilege_type, target_database, target_table, mysql_privilege, is_global) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          privilegeData.name, 
+          privilegeData.description || '',
+          privilegeData.privilege_type || 'DATABASE',
+          privilegeData.target_database || null,
+          privilegeData.target_table || null,
+          privilegeData.mysql_privilege || 'SELECT',
+          privilegeData.is_global || false
+        ]
       );
 
       const newPrivilege = await this.getPrivilegeById(result.insertId);
@@ -425,35 +495,163 @@ export const serverDb = {
     }
   },
 
-  // Database User Role operations
-  async getDatabaseUserRoles(dbUserId: number): Promise<Role[]> {
+  // Database User Role operations (Enhanced with Scoping)
+  async getDatabaseUserRoles(dbUserId: number): Promise<ScopedRoleAssignment[]> {
     try {
       const [rows] = await pool.execute<RowDataPacket[]>(
-        `SELECT r.* FROM Roles r 
-         INNER JOIN DatabaseUserRoles dur ON r.role_id = dur.role_id 
-         WHERE dur.db_user_id = ?`,
+        `SELECT 
+          dur.user_role_id,
+          dur.db_user_id,
+          dur.role_id,
+          r.name as role_name,
+          dur.scope_type,
+          dur.target_database,
+          dur.target_table,
+          dur.assigned_at,
+          dur.assigned_by,
+          dur.is_active
+         FROM DatabaseUserRoles dur 
+         INNER JOIN Roles r ON dur.role_id = r.role_id 
+         WHERE dur.db_user_id = ? AND dur.is_active = TRUE
+         ORDER BY dur.assigned_at DESC`,
         [dbUserId]
       );
-      return rows as Role[];
+      return rows as ScopedRoleAssignment[];
     } catch (error) {
       console.error('Error fetching database user roles:', error);
       throw error;
     }
   },
 
-  async assignRoleToDatabaseUser(dbUserId: number, roleId: number): Promise<void> {
+  async assignScopedRoleToDatabaseUser(data: {
+    dbUserId: number;
+    roleId: number;
+    scopeType: 'GLOBAL' | 'DATABASE' | 'TABLE';
+    targetDatabase?: string;
+    targetTable?: string;
+    assignedBy?: string;
+  }): Promise<ScopedRoleAssignment> {
     try {
-      await pool.execute(
-        'INSERT INTO DatabaseUserRoles (db_user_id, role_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE assigned_at = CURRENT_TIMESTAMP',
-        [dbUserId, roleId]
+      const [result] = await pool.execute<ResultSetHeader>(
+        `INSERT INTO DatabaseUserRoles 
+         (db_user_id, role_id, scope_type, target_database, target_table, assigned_by) 
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE 
+         assigned_at = CURRENT_TIMESTAMP, 
+         is_active = TRUE,
+         assigned_by = VALUES(assigned_by)`,
+        [
+          data.dbUserId, 
+          data.roleId, 
+          data.scopeType,
+          data.targetDatabase || null,
+          data.targetTable || null,
+          data.assignedBy || 'system'
+        ]
       );
-      
-      // Apply MySQL privileges after role assignment
-      await this.applyPrivilegesToDatabaseUser(dbUserId);
+
+      // Apply MySQL privileges for this scoped role assignment
+      await this.applyScopedRolePrivileges(data.dbUserId, data.roleId, data.scopeType, data.targetDatabase, data.targetTable);
+
+      // Return the created assignment
+      const [assignments] = await pool.execute<RowDataPacket[]>(
+        `SELECT 
+          dur.user_role_id,
+          dur.db_user_id,
+          dur.role_id,
+          r.name as role_name,
+          dur.scope_type,
+          dur.target_database,
+          dur.target_table,
+          dur.assigned_at,
+          dur.assigned_by,
+          dur.is_active
+         FROM DatabaseUserRoles dur 
+         INNER JOIN Roles r ON dur.role_id = r.role_id 
+         WHERE dur.user_role_id = ?`,
+        [result.insertId]
+      );
+
+      return assignments[0] as ScopedRoleAssignment;
     } catch (error) {
-      console.error('Error assigning role to database user:', error);
+      console.error('Error assigning scoped role:', error);
       throw error;
     }
+  },
+
+  async revokeScopedRoleFromDatabaseUser(userRoleId: number): Promise<void> {
+    try {
+      // Get the assignment details before removing
+      const [assignments] = await pool.execute<RowDataPacket[]>(
+        `SELECT dur.*, r.name as role_name
+         FROM DatabaseUserRoles dur 
+         INNER JOIN Roles r ON dur.role_id = r.role_id 
+         WHERE dur.user_role_id = ?`,
+        [userRoleId]
+      );
+
+      if (assignments.length === 0) {
+        throw new Error('Role assignment not found');
+      }
+
+      const assignment = assignments[0] as ScopedRoleAssignment;
+
+      // Revoke MySQL privileges for this scoped role assignment
+      await this.revokeScopedRolePrivileges(
+        assignment.db_user_id, 
+        assignment.role_id, 
+        assignment.scope_type, 
+        assignment.target_database, 
+        assignment.target_table
+      );
+
+      // Mark as inactive instead of deleting for audit trail
+      await pool.execute(
+        'UPDATE DatabaseUserRoles SET is_active = FALSE WHERE user_role_id = ?',
+        [userRoleId]
+      );
+    } catch (error) {
+      console.error('Error revoking scoped role:', error);
+      throw error;
+    }
+  },
+
+  async getUserScopedRoles(userId: number): Promise<ScopedRoleAssignment[]> {
+    try {
+      const [assignments] = await pool.execute<RowDataPacket[]>(
+        `SELECT 
+          dur.user_role_id,
+          dur.db_user_id,
+          dur.role_id,
+          r.name as role_name,
+          dur.scope_type,
+          dur.target_database,
+          dur.target_table,
+          dur.assigned_at,
+          dur.assigned_by,
+          dur.is_active
+         FROM DatabaseUserRoles dur 
+         INNER JOIN Roles r ON dur.role_id = r.role_id 
+         WHERE dur.db_user_id = ? AND dur.is_active = TRUE
+         ORDER BY dur.assigned_at DESC`,
+        [userId]
+      );
+
+      return assignments as ScopedRoleAssignment[];
+    } catch (error) {
+      console.error('Error fetching user scoped roles:', error);
+      throw error;
+    }
+  },
+
+  // Legacy method for backward compatibility
+  async assignRoleToDatabaseUser(dbUserId: number, roleId: number): Promise<void> {
+    await this.assignScopedRoleToDatabaseUser({
+      dbUserId,
+      roleId,
+      scopeType: 'GLOBAL',
+      assignedBy: 'system'
+    });
   },
 
   async removeRoleFromDatabaseUser(dbUserId: number, roleId: number): Promise<boolean> {
@@ -734,7 +932,302 @@ export const serverDb = {
         timestamp: new Date().toISOString()
       };
     }
-  }
+  },
+
+  // Database Objects operations
+  async getDatabaseObjects(): Promise<DatabaseObject[]> {
+    try {
+      const [rows] = await pool.execute<RowDataPacket[]>('SELECT * FROM DatabaseObjects ORDER BY database_name, table_name');
+      return rows as DatabaseObject[];
+    } catch (error) {
+      console.error('Error fetching database objects:', error);
+      throw error;
+    }
+  },
+
+  async getDatabases(): Promise<DatabaseObject[]> {
+    try {
+      const [rows] = await pool.execute<RowDataPacket[]>('SELECT * FROM DatabaseObjects WHERE object_type = "DATABASE" ORDER BY database_name');
+      return rows as DatabaseObject[];
+    } catch (error) {
+      console.error('Error fetching databases:', error);
+      throw error;
+    }
+  },
+
+  async getTablesForDatabase(databaseName: string): Promise<DatabaseObject[]> {
+    try {
+      const [rows] = await pool.execute<RowDataPacket[]>('SELECT * FROM DatabaseObjects WHERE object_type = "TABLE" AND database_name = ? ORDER BY table_name', [databaseName]);
+      return rows as DatabaseObject[];
+    } catch (error) {
+      console.error('Error fetching tables for database:', error);
+      throw error;
+    }
+  },
+
+  // User Specific Privileges operations
+  async getUserSpecificPrivileges(userId: number): Promise<UserSpecificPrivilege[]> {
+    try {
+      const [rows] = await pool.execute<RowDataPacket[]>('SELECT * FROM UserSpecificPrivileges WHERE db_user_id = ? ORDER BY target_database, target_table', [userId]);
+      return rows as UserSpecificPrivilege[];
+    } catch (error) {
+      console.error('Error fetching user specific privileges:', error);
+      throw error;
+    }
+  },
+
+  async grantUserSpecificPrivilege(data: {
+    userId: number;
+    privilegeType: string;
+    targetDatabase: string;
+    targetTable?: string;
+    grantedBy?: string;
+  }): Promise<UserSpecificPrivilege> {
+    try {
+      const [result] = await pool.execute<ResultSetHeader>(
+        'INSERT INTO UserSpecificPrivileges (db_user_id, privilege_type, target_database, target_table, granted_by) VALUES (?, ?, ?, ?, ?)',
+        [data.userId, data.privilegeType, data.targetDatabase, data.targetTable || null, data.grantedBy || 'system']
+      );
+
+      // Apply the privilege to MySQL user
+      await this.applyMySQLPrivilege(data.userId, data.privilegeType, data.targetDatabase, data.targetTable);
+
+      const [newPrivilege] = await pool.execute<RowDataPacket[]>('SELECT * FROM UserSpecificPrivileges WHERE user_privilege_id = ?', [result.insertId]);
+      return newPrivilege[0] as UserSpecificPrivilege;
+    } catch (error) {
+      console.error('Error granting user specific privilege:', error);
+      throw error;
+    }
+  },
+
+  async revokeUserSpecificPrivilege(userId: number, privilegeId: number): Promise<void> {
+    try {
+      // Get privilege details first
+      const [privilegeRows] = await pool.execute<RowDataPacket[]>('SELECT * FROM UserSpecificPrivileges WHERE user_privilege_id = ? AND db_user_id = ?', [privilegeId, userId]);
+      
+      if (privilegeRows.length === 0) {
+        throw new Error('Privilege not found');
+      }
+
+      const privilege = privilegeRows[0] as UserSpecificPrivilege;
+
+      // Revoke from MySQL
+      await this.revokeMySQLPrivilege(userId, privilege.privilege_type, privilege.target_database, privilege.target_table);
+
+      // Remove from database
+      await pool.execute('DELETE FROM UserSpecificPrivileges WHERE user_privilege_id = ? AND db_user_id = ?', [privilegeId, userId]);
+    } catch (error) {
+      console.error('Error revoking user specific privilege:', error);
+      throw error;
+    }
+  },
+
+  async applyMySQLPrivilege(userId: number, privilegeType: string, targetDatabase: string, targetTable?: string): Promise<void> {
+    try {
+      // Get user details
+      const user = await this.getDatabaseUserById(userId);
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      const username = user.username;
+      const host = user.host;
+
+      // Build GRANT statement
+      let grantStatement: string;
+      if (targetTable) {
+        grantStatement = `GRANT ${privilegeType} ON \`${targetDatabase}\`.\`${targetTable}\` TO '${username}'@'${host}'`;
+      } else {
+        grantStatement = `GRANT ${privilegeType} ON \`${targetDatabase}\`.* TO '${username}'@'${host}'`;
+      }
+
+      console.log('Executing GRANT statement:', grantStatement);
+      await pool.execute(grantStatement);
+      await pool.execute('FLUSH PRIVILEGES');
+    } catch (error) {
+      console.error('Error applying MySQL privilege:', error);
+      throw error;
+    }
+  },
+
+  async revokeMySQLPrivilege(userId: number, privilegeType: string, targetDatabase: string, targetTable?: string): Promise<void> {
+    try {
+      // Get user details
+      const user = await this.getDatabaseUserById(userId);
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      const username = user.username;
+      const host = user.host;
+
+      // Build REVOKE statement
+      let revokeStatement: string;
+      if (targetTable) {
+        revokeStatement = `REVOKE ${privilegeType} ON \`${targetDatabase}\`.\`${targetTable}\` FROM '${username}'@'${host}'`;
+      } else {
+        revokeStatement = `REVOKE ${privilegeType} ON \`${targetDatabase}\`.* FROM '${username}'@'${host}'`;
+      }
+
+      console.log('Executing REVOKE statement:', revokeStatement);
+      await pool.execute(revokeStatement);
+      await pool.execute('FLUSH PRIVILEGES');
+    } catch (error) {
+      console.error('Error revoking MySQL privilege:', error);
+      throw error;
+    }
+  },
+
+  async getUserEffectivePrivileges(userId: number): Promise<{
+    rolePrivileges: Privilege[];
+    directPrivileges: UserSpecificPrivilege[];
+  }> {
+    try {
+      // Get privileges from roles
+      const [rolePrivileges] = await pool.execute<RowDataPacket[]>(`
+        SELECT DISTINCT p.* 
+        FROM Privileges p
+        JOIN RolePrivileges rp ON p.privilege_id = rp.privilege_id
+        JOIN DatabaseUserRoles dur ON rp.role_id = dur.role_id
+        WHERE dur.db_user_id = ?
+      `, [userId]);
+
+      // Get direct privileges
+      const directPrivileges = await this.getUserSpecificPrivileges(userId);
+
+      return {
+        rolePrivileges: rolePrivileges as Privilege[],
+        directPrivileges
+      };
+    } catch (error) {
+      console.error('Error fetching user effective privileges:', error);
+      throw error;
+    }
+  },
+
+  async applyScopedRolePrivileges(
+    userId: number, 
+    roleId: number, 
+    scopeType: 'GLOBAL' | 'DATABASE' | 'TABLE', 
+    targetDatabase?: string, 
+    targetTable?: string
+  ): Promise<void> {
+    try {
+      // Get user details
+      const user = await this.getDatabaseUserById(userId);
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      // Get role privileges
+      const [rolePrivileges] = await pool.execute<RowDataPacket[]>(
+        `SELECT p.mysql_privilege 
+         FROM Privileges p
+         JOIN RolePrivileges rp ON p.privilege_id = rp.privilege_id
+         WHERE rp.role_id = ?`,
+        [roleId]
+      );
+
+      const username = user.username;
+      const host = user.host;
+
+      // Apply each privilege with the specified scope
+      for (const priv of rolePrivileges) {
+        let grantStatement: string;
+        
+        // Ensure we have valid privilege type
+        if (!priv.mysql_privilege) {
+          console.warn('Skipping privilege with no mysql_privilege defined');
+          continue;
+        }
+        
+        // Normalize null values - handle both null and string 'null'
+        const normalizedDatabase = targetDatabase && targetDatabase !== 'null' ? targetDatabase : null;
+        const normalizedTable = targetTable && targetTable !== 'null' ? targetTable : null;
+        
+        if (scopeType === 'GLOBAL') {
+          grantStatement = `GRANT ${priv.mysql_privilege} ON *.* TO '${username}'@'${host}'`;
+        } else if (scopeType === 'DATABASE' && normalizedDatabase) {
+          grantStatement = `GRANT ${priv.mysql_privilege} ON \`${normalizedDatabase}\`.* TO '${username}'@'${host}'`;
+        } else if (scopeType === 'TABLE' && normalizedDatabase && normalizedTable) {
+          grantStatement = `GRANT ${priv.mysql_privilege} ON \`${normalizedDatabase}\`.\`${normalizedTable}\` TO '${username}'@'${host}'`;
+        } else {
+          console.warn(`Skipping invalid scope combination: scopeType=${scopeType}, targetDatabase=${targetDatabase}, targetTable=${targetTable}`);
+          continue; // Skip invalid scope combinations
+        }
+
+        console.log('Executing scoped GRANT statement:', grantStatement);
+        await pool.execute(grantStatement);
+      }
+
+      await pool.execute('FLUSH PRIVILEGES');
+    } catch (error) {
+      console.error('Error applying scoped role privileges:', error);
+      throw error;
+    }
+  },
+
+  async revokeScopedRolePrivileges(
+    userId: number, 
+    roleId: number, 
+    scopeType: 'GLOBAL' | 'DATABASE' | 'TABLE', 
+    targetDatabase?: string, 
+    targetTable?: string
+  ): Promise<void> {
+    try {
+      // Get user details
+      const user = await this.getDatabaseUserById(userId);
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      // Get role privileges
+      const [rolePrivileges] = await pool.execute<RowDataPacket[]>(
+        `SELECT p.mysql_privilege 
+         FROM Privileges p
+         JOIN RolePrivileges rp ON p.privilege_id = rp.privilege_id
+         WHERE rp.role_id = ?`,
+        [roleId]
+      );
+
+      const username = user.username;
+      const host = user.host;
+
+      // Revoke each privilege with the specified scope
+      for (const priv of rolePrivileges) {
+        let revokeStatement: string;
+        
+        // Ensure we have valid privilege type
+        if (!priv.mysql_privilege) {
+          console.warn('Skipping privilege with no mysql_privilege defined');
+          continue;
+        }
+        
+        // Normalize null values - handle both null and string 'null'
+        const normalizedDatabase = targetDatabase && targetDatabase !== 'null' ? targetDatabase : null;
+        const normalizedTable = targetTable && targetTable !== 'null' ? targetTable : null;
+        
+        if (scopeType === 'GLOBAL') {
+          revokeStatement = `REVOKE ${priv.mysql_privilege} ON *.* FROM '${username}'@'${host}'`;
+        } else if (scopeType === 'DATABASE' && normalizedDatabase) {
+          revokeStatement = `REVOKE ${priv.mysql_privilege} ON \`${normalizedDatabase}\`.* FROM '${username}'@'${host}'`;
+        } else if (scopeType === 'TABLE' && normalizedDatabase && normalizedTable) {
+          revokeStatement = `REVOKE ${priv.mysql_privilege} ON \`${normalizedDatabase}\`.\`${normalizedTable}\` FROM '${username}'@'${host}'`;
+        } else {
+          console.warn(`Skipping invalid scope combination: scopeType=${scopeType}, targetDatabase=${targetDatabase}, targetTable=${targetTable}`);
+          continue; // Skip invalid scope combinations
+        }
+
+        console.log('Executing scoped REVOKE statement:', revokeStatement);
+        await pool.execute(revokeStatement);
+      }
+
+      await pool.execute('FLUSH PRIVILEGES');
+    } catch (error) {
+      console.error('Error revoking scoped role privileges:', error);
+      throw error;
+    }
+  },
 };
 
 export default serverDb;

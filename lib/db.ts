@@ -21,19 +21,97 @@ export interface Privilege {
   description: string;
   privilege_type: 'DATABASE' | 'TABLE' | 'COLUMN' | 'ROUTINE';
   target_object?: string;
+  target_database?: string;
+  target_table?: string;
+  mysql_privilege?: string;
+  is_global: boolean;
   created_at: string;
 }
 
+export interface DatabaseObject {
+  object_id: number;
+  object_type: 'DATABASE' | 'TABLE';
+  database_name: string;
+  table_name?: string;
+  description?: string;
+  created_at: string;
+}
+
+// Discovered database interfaces for real MariaDB discovery
+export interface DiscoveredDatabase {
+  database_name: string;
+  charset: string;
+  collation: string;
+  type: string;
+}
+
+export interface DiscoveredTable {
+  database_name: string;
+  table_name: string;
+  table_type: string;
+  engine?: string;
+  row_count: number;
+  data_length: number;
+  created_at?: string;
+  comment?: string;
+  type: string;
+}
+
+export interface UserSpecificPrivilege {
+  user_privilege_id: number;
+  db_user_id: number;
+  privilege_type: 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'DROP' | 'ALTER' | 'INDEX' | 'GRANT';
+  target_database: string;
+  target_table?: string;
+  granted_at: string;
+  granted_by: string;
+}
+
+export interface UserEffectivePrivileges {
+  rolePrivileges: Privilege[];
+  directPrivileges: UserSpecificPrivilege[];
+}
+
 export interface DatabaseUserRole {
+  user_role_id: number;
   db_user_id: number;
   role_id: number;
+  scope_type: 'GLOBAL' | 'DATABASE' | 'TABLE';
+  target_database?: string;
+  target_table?: string;
   assigned_at: string;
+  assigned_by: string;
+  is_active: boolean;
+}
+
+export interface ScopedRoleAssignment {
+  user_role_id: number;
+  db_user_id: number;
+  role_id: number;
+  role_name: string;
+  scope_type: 'GLOBAL' | 'DATABASE' | 'TABLE';
+  target_database?: string;
+  target_table?: string;
+  assigned_at: string;
+  assigned_by: string;
+  is_active: boolean;
 }
 
 export interface RolePrivilege {
   role_id: number;
   privilege_id: number;
   assigned_at: string;
+}
+
+// Discovery methods for real MariaDB databases
+export interface DiscoveredDatabase {
+  database_name: string;
+  // Add other properties as needed
+}
+
+export interface DiscoveredTable {
+  table_name: string;
+  // Add other properties as needed
 }
 
 // Client-side API wrapper
@@ -197,7 +275,15 @@ export const db = {
     return data.data;
   },
 
-  async createPrivilege(privilegeData: { name: string; description?: string }): Promise<Privilege> {
+  async createPrivilege(privilegeData: {
+    name: string;
+    description?: string;
+    privilege_type?: string;
+    target_database?: string;
+    target_table?: string;
+    mysql_privilege?: string;
+    is_global?: boolean;
+  }): Promise<Privilege> {
     const response = await fetch('/api/privileges', {
       method: 'POST',
       headers: {
@@ -393,7 +479,152 @@ export const db = {
       throw new Error(data.error || 'Health check failed');
     }
     return data.data;
-  }
+  },
+
+  // Database Objects operations
+  async getDatabaseObjects(): Promise<DatabaseObject[]> {
+    const response = await fetch('/api/database-objects');
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch database objects');
+    }
+    return data.data;
+  },
+
+  async getDatabases(): Promise<DatabaseObject[]> {
+    const response = await fetch('/api/databases');
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch databases');
+    }
+    return data.data;
+  },
+
+  async getTablesForDatabase(databaseName: string): Promise<DatabaseObject[]> {
+    const response = await fetch(`/api/databases/${encodeURIComponent(databaseName)}/tables`);
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch tables');
+    }
+    return data.data;
+  },
+
+  // User Specific Privileges operations
+  async getUserEffectivePrivileges(userId: number): Promise<UserEffectivePrivileges> {
+    const response = await fetch(`/api/users/${userId}/privileges`);
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch user privileges');
+    }
+    return data.data;
+  },
+
+  async grantUserSpecificPrivilege(data: {
+    userId: number;
+    privilegeType: string;
+    targetDatabase: string;
+    targetTable?: string;
+    grantedBy?: string;
+  }): Promise<UserSpecificPrivilege> {
+    const response = await fetch(`/api/users/${data.userId}/privileges`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        privilegeType: data.privilegeType,
+        targetDatabase: data.targetDatabase,
+        targetTable: data.targetTable,
+        grantedBy: data.grantedBy,
+      }),
+    });
+
+    const result = await response.json();
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to grant privilege');
+    }
+    return result.data;
+  },
+
+  async revokeUserSpecificPrivilege(userId: number, privilegeId: number): Promise<void> {
+    const response = await fetch(`/api/users/${userId}/privileges/${privilegeId}`, {
+      method: 'DELETE',
+    });
+
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to revoke privilege');
+    }
+  },
+
+  // Scoped Role Assignment operations
+  async assignScopedRoleToUser(data: {
+    dbUserId: number;
+    roleId: number;
+    scopeType: 'GLOBAL' | 'DATABASE' | 'TABLE';
+    targetDatabase?: string;
+    targetTable?: string;
+    assignedBy?: string;
+  }): Promise<ScopedRoleAssignment> {
+    const response = await fetch(`/api/users/${data.dbUserId}/scoped-roles`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        roleId: data.roleId,
+        scopeType: data.scopeType,
+        targetDatabase: data.targetDatabase,
+        targetTable: data.targetTable,
+        assignedBy: data.assignedBy,
+      }),
+    });
+
+    const result = await response.json();
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to assign scoped role');
+    }
+    return result.data;
+  },
+
+  async revokeScopedRoleFromUser(userId: number, userRoleId: number): Promise<void> {
+    const response = await fetch(`/api/users/${userId}/scoped-roles/${userRoleId}`, {
+      method: 'DELETE',
+    });
+
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to revoke scoped role');
+    }
+  },
+
+  async getUserScopedRoles(userId: number): Promise<ScopedRoleAssignment[]> {
+    const response = await fetch(`/api/users/${userId}/scoped-roles`);
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch user scoped roles');
+    }
+    return data.data;
+  },
+
+  // Discovery methods for real MariaDB databases
+  async getDiscoveredDatabases(): Promise<DiscoveredDatabase[]> {
+    const response = await fetch('/api/discover/databases');
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to discover databases');
+    }
+    return data.data;
+  },
+
+  async getDiscoveredTablesForDatabase(databaseName: string): Promise<DiscoveredTable[]> {
+    const response = await fetch(`/api/discover/databases/${encodeURIComponent(databaseName)}/tables`);
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to discover tables');
+    }
+    return data.data;
+  },
 };
 
 export default db;

@@ -17,9 +17,10 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Plus, Edit, Trash2, UserPlus, RefreshCw, Database, Shield } from "lucide-react"
+import { Plus, Edit, Trash2, UserPlus, RefreshCw, Database, Shield, Settings } from "lucide-react"
 import { db, type DatabaseUser, type Role } from "@/lib/db"
 import { auth } from "@/lib/auth"
+import { GranularPrivilegeManager } from "./granular-privilege-manager"
 
 export function UserManagement() {
   const [dbUsers, setDbUsers] = useState<DatabaseUser[]>([])
@@ -30,6 +31,7 @@ export function UserManagement() {
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isAssignRoleOpen, setIsAssignRoleOpen] = useState(false)
+  const [isPrivilegeManagerOpen, setIsPrivilegeManagerOpen] = useState(false)
   const [selectedUser, setSelectedUser] = useState<DatabaseUser | null>(null)
   const [formData, setFormData] = useState({ username: "", host: "%", description: "", password: "" })
   const [selectedRoles, setSelectedRoles] = useState<number[]>([])
@@ -177,7 +179,12 @@ export function UserManagement() {
   }
 
   const getUserRoles = (dbUserId: number) => {
-    return userRolesMap[dbUserId] || []
+    const roles = userRolesMap[dbUserId] || []
+    // Deduplicate roles by role_id to avoid duplicate keys
+    const uniqueRoles = roles.filter((role, index, self) => 
+      self.findIndex(r => r.role_id === role.role_id) === index
+    )
+    return uniqueRoles
   }
 
   const openEditDialog = (user: DatabaseUser) => {
@@ -201,6 +208,11 @@ export function UserManagement() {
     } catch (error) {
       console.error("Failed to load user roles:", error)
     }
+  }
+
+  const openPrivilegeManagerDialog = (user: DatabaseUser) => {
+    setSelectedUser(user)
+    setIsPrivilegeManagerOpen(true)
   }
 
   if (loading) {
@@ -346,11 +358,20 @@ export function UserManagement() {
                     <Button variant="outline" size="sm" onClick={() => openAssignRoleDialog(user)}>
                       <UserPlus className="h-4 w-4" />
                     </Button>
+                    <Button variant="outline" size="sm" onClick={() => openPrivilegeManagerDialog(user)}>
+                      <Settings className="h-4 w-4" />
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => handleDeleteUser(user.db_user_id)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => handleApplyPrivileges(user.db_user_id)}>
                       <Shield className="h-4 w-4" />
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => {
+                      setSelectedUser(user)
+                      setIsPrivilegeManagerOpen(true)
+                    }}>
+                      <Settings className="h-4 w-4" />
                     </Button>
                   </div>
                 </TableCell>
@@ -439,6 +460,29 @@ export function UserManagement() {
                 Cancel
               </Button>
               <Button onClick={handleAssignRoles}>Assign Roles</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Granular Privilege Manager Dialog */}
+        <Dialog open={isPrivilegeManagerOpen} onOpenChange={setIsPrivilegeManagerOpen}>
+          <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Granular Privilege Management</DialogTitle>
+              <DialogDescription>
+                Manage specific database and table-level permissions for {selectedUser?.username}
+              </DialogDescription>
+            </DialogHeader>
+            {selectedUser && (
+              <GranularPrivilegeManager 
+                user={selectedUser} 
+                onPrivilegesChange={loadData}
+              />
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsPrivilegeManagerOpen(false)}>
+                Close
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
