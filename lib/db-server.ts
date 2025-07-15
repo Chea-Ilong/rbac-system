@@ -1328,6 +1328,525 @@ export const serverDb = {
       throw error;
     }
   },
+
+  // Backup and Recovery operations
+  async getBackupDatabaseInfo(): Promise<any[]> {
+    try {
+      const connection = await pool.getConnection();
+      
+      // Get all databases (excluding system databases)
+      const [databases] = await connection.execute<RowDataPacket[]>(
+        `SHOW DATABASES`
+      );
+      
+      const databaseInfo = [];
+      
+      for (const db of databases as any[]) {
+        const dbName = db.Database;
+        
+        // Skip system databases
+        if (['information_schema', 'performance_schema', 'mysql', 'sys'].includes(dbName.toLowerCase())) {
+          continue;
+        }
+        
+        // Get database size
+        const [sizeResult] = await connection.execute<RowDataPacket[]>(
+          `SELECT 
+            ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS size_mb
+           FROM information_schema.tables 
+           WHERE table_schema = ?`,
+          [dbName]
+        );
+        
+        const size = sizeResult[0]?.size_mb || 0;
+        
+        // Get tables for this database
+        const [tables] = await connection.execute<RowDataPacket[]>(
+          `SELECT 
+            table_name,
+            table_rows,
+            ROUND((data_length + index_length) / 1024 / 1024, 2) AS size_mb,
+            engine
+           FROM information_schema.tables 
+           WHERE table_schema = ? AND table_type = 'BASE TABLE'
+           ORDER BY table_name`,
+          [dbName]
+        );
+        
+        databaseInfo.push({
+          name: dbName,
+          size: `${size} MB`,
+          tables: tables.map((table: any) => ({
+            name: table.table_name,
+            rows: table.table_rows || 0,
+            size: `${table.size_mb || 0} MB`,
+            engine: table.engine || 'Unknown'
+          }))
+        });
+      }
+      
+      connection.release();
+      return databaseInfo;
+    } catch (error) {
+      console.error('Error getting backup database info:', error);
+      throw error;
+    }
+  },
+
+  async createBackup(config: {
+    name: string;
+    description?: string;
+    type: 'full' | 'schema-only' | 'data-only' | 'selective';
+    databases: string[];
+    tables?: Record<string, string[]>;
+    includeData: boolean;
+    includeSchema: boolean;
+    compression: boolean;
+  }): Promise<{ backupId: string }> {
+    try {
+      // Create backup record
+      const [result] = await pool.execute<ResultSetHeader>(
+        `INSERT INTO BackupJobs (name, description, type, config, status, created_at) 
+         VALUES (?, ?, ?, ?, 'in-progress', NOW())`,
+        [
+          config.name,
+          config.description || '',
+          config.type,
+          JSON.stringify(config)
+        ]
+      );
+
+      const backupId = result.insertId.toString();
+
+      // Start backup process in background
+      this.performBackup(backupId, config).catch(error => {
+        console.error('Background backup failed:', error);
+        // Update backup status to failed
+        pool.execute(
+          'UPDATE BackupJobs SET status = ?, error_message = ?, completed_at = NOW() WHERE id = ?',
+          ['failed', error.message, backupId]
+        );
+      });
+
+      return { backupId };
+    } catch (error) {
+      console.error('Error creating backup:', error);
+      throw error;
+    }
+  },
+
+  async performBackup(backupId: string, config: any): Promise<void> {
+    const connection = await pool.getConnection();
+    try {
+      let progress = 0;
+      await this.updateBackupProgress(backupId, progress, 'Starting backup...');
+
+      const fs = require('fs');
+      const path = require('path');
+      const { spawn } = require('child_process');
+      
+      // Create backups directory if it doesn't exist
+      const backupDir = path.join(process.cwd(), 'backups');
+      if (!fs.existsSync(backupDir)) {
+        fs.mkdirSync(backupDir, { recursive: true });
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const filename = `${config.name}_${timestamp}.sql`;
+      const filepath = path.join(backupDir, filename);
+
+      progress = 10;
+      await this.updateBackupProgress(backupId, progress, 'Preparing mysqldump...');
+
+      // Create a temporary MySQL config file for secure authentication
+      const os = require('os');
+      const tmpDir = os.tmpdir();
+      const configFile = path.join(tmpDir, `mysqldump_${Date.now()}.cnf`);
+      
+      const mysqlConfig = `[client]
+host=${process.env.DB_HOST || 'localhost'}
+user=${process.env.DB_USER || 'root'}
+password=${process.env.DB_PASSWORD || ''}
+`;
+
+      fs.writeFileSync(configFile, mysqlConfig);
+
+      // Build mysqldump command
+      const args = [
+        `--defaults-extra-file=${configFile}`,
+        '--single-transaction',
+        '--routines',
+        '--triggers',
+        '--skip-comments'
+      ];
+
+      // Check if we're using MySQL (not MariaDB) before adding GTID options
+      try {
+        const [versionRows] = await connection.execute<RowDataPacket[]>('SELECT VERSION() as version');
+        const version = versionRows[0]?.version || '';
+        
+        // Only add GTID options for MySQL (not MariaDB)
+        if (version.toLowerCase().includes('mysql') && !version.toLowerCase().includes('mariadb')) {
+          // Check if MySQL version supports GTID (5.6+)
+          const versionMatch = version.match(/(\d+)\.(\d+)/);
+          if (versionMatch) {
+            const major = parseInt(versionMatch[1]);
+            const minor = parseInt(versionMatch[2]);
+            if (major > 5 || (major === 5 && minor >= 6)) {
+              args.push('--set-gtid-purged=OFF');
+            }
+          }
+        }
+      } catch (versionError) {
+        console.warn('Could not detect database version, skipping GTID options:', versionError);
+      }
+
+      // Add schema/data options
+      if (!config.includeData) {
+        args.push('--no-data');
+      }
+      if (!config.includeSchema) {
+        args.push('--no-create-info');
+      }
+
+      // Add databases
+      if (config.type === 'selective' && config.tables) {
+        // For selective backup, we need to specify each table
+        for (const [database, tables] of Object.entries(config.tables)) {
+          args.push(database);
+          args.push(...(tables as string[]));
+        }
+      } else {
+        // For full/schema/data backups
+        args.push('--databases');
+        args.push(...config.databases);
+      }
+
+      progress = 30;
+      await this.updateBackupProgress(backupId, progress, 'Running mysqldump...');
+
+      try {
+        // Execute mysqldump
+        const mysqldump = spawn('mysqldump', args);
+        const writeStream = fs.createWriteStream(filepath);
+        
+        mysqldump.stdout.pipe(writeStream);
+
+        let errorOutput = '';
+        mysqldump.stderr.on('data', (data: Buffer) => {
+          const output = data.toString();
+          console.log('mysqldump stderr:', output);
+          errorOutput += output;
+        });
+
+        await new Promise((resolve, reject) => {
+          mysqldump.on('close', (code: number) => {
+            console.log('mysqldump exited with code:', code);
+            if (code === 0) {
+              progress = 80;
+              this.updateBackupProgress(backupId, progress, 'Backup completed, finalizing...');
+              resolve(null);
+            } else {
+              console.error('mysqldump failed with error:', errorOutput);
+              reject(new Error(`mysqldump failed with code ${code}: ${errorOutput}`));
+            }
+          });
+
+          mysqldump.on('error', (error: Error) => {
+            console.error('mysqldump process error:', error);
+            reject(new Error(`Failed to start mysqldump: ${error.message}`));
+          });
+        });
+
+      } finally {
+        // Clean up the temporary config file
+        try {
+          fs.unlinkSync(configFile);
+          console.log('Cleaned up temporary config file');
+        } catch (e) {
+          console.warn('Failed to cleanup temp config file:', e);
+        }
+      }
+
+      // Compress if requested
+      if (config.compression) {
+        progress = 85;
+        await this.updateBackupProgress(backupId, progress, 'Compressing backup...');
+        
+        const zlib = require('zlib');
+        const gzip = zlib.createGzip();
+        const readStream = fs.createReadStream(filepath);
+        const compressedPath = `${filepath}.gz`;
+        const compressedStream = fs.createWriteStream(compressedPath);
+        
+        await new Promise((resolve, reject) => {
+          readStream.pipe(gzip).pipe(compressedStream);
+          compressedStream.on('finish', resolve);
+          compressedStream.on('error', reject);
+        });
+
+        // Remove uncompressed file
+        fs.unlinkSync(filepath);
+      }
+
+      // Get final file size
+      const finalPath = config.compression ? `${filepath}.gz` : filepath;
+      const stats = fs.statSync(finalPath);
+      const fileSize = Math.round(stats.size / 1024 / 1024 * 100) / 100; // MB
+
+      progress = 100;
+      await this.updateBackupProgress(backupId, progress, 'Backup completed successfully');
+
+      // Update backup record
+      await connection.execute(
+        `UPDATE BackupJobs 
+         SET status = 'completed', file_path = ?, file_size = ?, completed_at = NOW()
+         WHERE id = ?`,
+        [finalPath, `${fileSize} MB`, backupId]
+      );
+
+    } catch (error) {
+      console.error('Error performing backup:', error);
+      await connection.execute(
+        'UPDATE BackupJobs SET status = ?, error_message = ?, completed_at = NOW() WHERE id = ?',
+        ['failed', error instanceof Error ? error.message : 'Unknown error', backupId]
+      );
+      throw error;
+    } finally {
+      connection.release();
+    }
+  },
+
+  async updateBackupProgress(backupId: string, progress: number, message: string): Promise<void> {
+    try {
+      await pool.execute(
+        'UPDATE BackupJobs SET progress = ?, status_message = ? WHERE id = ?',
+        [progress, message, backupId]
+      );
+    } catch (error) {
+      console.error('Error updating backup progress:', error);
+    }
+  },
+
+  async getBackupProgress(backupId: string): Promise<{
+    progress: number;
+    status: string;
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      const [rows] = await pool.execute<RowDataPacket[]>(
+        'SELECT progress, status, status_message, error_message FROM BackupJobs WHERE id = ?',
+        [backupId]
+      );
+
+      if (rows.length === 0) {
+        throw new Error('Backup not found');
+      }
+
+      const backup = rows[0];
+      return {
+        progress: backup.progress || 0,
+        status: backup.status,
+        message: backup.status_message,
+        error: backup.error_message
+      };
+    } catch (error) {
+      console.error('Error getting backup progress:', error);
+      throw error;
+    }
+  },
+
+  async getBackups(): Promise<any[]> {
+    try {
+      const [rows] = await pool.execute<RowDataPacket[]>(
+        `SELECT 
+          id, name, description, type, status, file_size, created_at, completed_at,
+          config
+         FROM BackupJobs 
+         ORDER BY created_at DESC`
+      );
+
+      return rows.map((row: any) => {
+        let databases = [];
+        try {
+          const config = JSON.parse(row.config || '{}');
+          databases = config.databases || [];
+        } catch (e) {
+          console.warn('Failed to parse backup config:', e);
+        }
+        
+        return {
+          id: row.id.toString(),
+          name: row.name,
+          description: row.description,
+          type: row.type,
+          status: row.status,
+          size: row.file_size || 'Unknown',
+          created_at: row.created_at,
+          completed_at: row.completed_at,
+          databases: databases
+        };
+      });
+    } catch (error) {
+      console.error('Error getting backups:', error);
+      throw error;
+    }
+  },
+
+  async deleteBackup(backupId: string): Promise<void> {
+    try {
+      // Get backup info
+      const [rows] = await pool.execute<RowDataPacket[]>(
+        'SELECT file_path FROM BackupJobs WHERE id = ?',
+        [backupId]
+      );
+
+      if (rows.length === 0) {
+        throw new Error('Backup not found');
+      }
+
+      const backup = rows[0];
+      
+      // Delete file if it exists
+      if (backup.file_path) {
+        const fs = require('fs');
+        if (fs.existsSync(backup.file_path)) {
+          fs.unlinkSync(backup.file_path);
+        }
+      }
+
+      // Delete backup record
+      await pool.execute('DELETE FROM BackupJobs WHERE id = ?', [backupId]);
+    } catch (error) {
+      console.error('Error deleting backup:', error);
+      throw error;
+    }
+  },
+
+  async restoreBackup(config: {
+    backupId: string;
+    type: 'full' | 'selective';
+    targetDatabase?: string;
+    overwriteExisting: boolean;
+  }): Promise<void> {
+    try {
+      // Get backup info
+      const [rows] = await pool.execute<RowDataPacket[]>(
+        'SELECT file_path, name FROM BackupJobs WHERE id = ? AND status = "completed"',
+        [config.backupId]
+      );
+
+      if (rows.length === 0) {
+        throw new Error('Backup not found or not completed');
+      }
+
+      const backup = rows[0];
+      const fs = require('fs');
+      
+      if (!fs.existsSync(backup.file_path)) {
+        throw new Error('Backup file not found');
+      }
+
+      const { spawn } = require('child_process');
+      
+      console.log('Starting restore process for backup:', backup.name);
+      console.log('File path:', backup.file_path);
+      console.log('Target database:', config.targetDatabase || 'original');
+
+      // Create a temporary MySQL config file for secure authentication
+      const os = require('os');
+      const path = require('path');
+      const tmpDir = os.tmpdir();
+      const configFile = path.join(tmpDir, `mysql_restore_${Date.now()}.cnf`);
+      
+      const mysqlConfig = `[client]
+host=${process.env.DB_HOST || 'localhost'}
+user=${process.env.DB_USER || 'root'}
+password=${process.env.DB_PASSWORD || ''}
+`;
+
+      fs.writeFileSync(configFile, mysqlConfig);
+
+      try {
+        let mysqlProcess;
+        
+        if (backup.file_path.endsWith('.gz')) {
+          // For compressed files, use shell command to pipe zcat to mysql
+          const shellCommand = config.targetDatabase 
+            ? `zcat "${backup.file_path}" | mysql --defaults-extra-file="${configFile}" --force "${config.targetDatabase}"`
+            : `zcat "${backup.file_path}" | mysql --defaults-extra-file="${configFile}" --force`;
+          
+          console.log('Executing compressed restore command');
+          mysqlProcess = spawn('bash', ['-c', shellCommand]);
+        } else {
+          // For uncompressed files
+          const args = [`--defaults-extra-file=${configFile}`, '--force'];
+          if (config.targetDatabase) {
+            args.push(config.targetDatabase);
+          }
+          
+          console.log('Executing uncompressed restore with args:', args);
+          mysqlProcess = spawn('mysql', args);
+          
+          // Pipe the file content to mysql
+          const inputStream = fs.createReadStream(backup.file_path);
+          inputStream.pipe(mysqlProcess.stdin);
+        }
+
+        let errorOutput = '';
+        let stdOutput = '';
+
+        mysqlProcess.stderr?.on('data', (data: Buffer) => {
+          const output = data.toString();
+          console.log('MySQL stderr:', output);
+          errorOutput += output;
+        });
+
+        mysqlProcess.stdout?.on('data', (data: Buffer) => {
+          const output = data.toString();
+          console.log('MySQL stdout:', output);
+          stdOutput += output;
+        });
+
+        await new Promise((resolve, reject) => {
+          mysqlProcess.on('close', (code: number) => {
+            console.log('MySQL process exited with code:', code);
+            // MySQL may exit with code 1 for warnings but still succeed
+            // Check if there were actual errors vs just warnings
+            const hasErrors = errorOutput.toLowerCase().includes('error') && 
+                             !errorOutput.toLowerCase().includes('warning');
+            
+            if (code === 0 || (!hasErrors && code === 1)) {
+              console.log('Restore completed successfully');
+              resolve(null);
+            } else {
+              console.error('Restore failed with error output:', errorOutput);
+              console.error('Restore failed with std output:', stdOutput);
+              reject(new Error(`MySQL restore failed with code ${code}. Error: ${errorOutput}. Output: ${stdOutput}`));
+            }
+          });
+
+          mysqlProcess.on('error', (error: Error) => {
+            console.error('MySQL process error:', error);
+            reject(new Error(`Failed to start MySQL process: ${error.message}`));
+          });
+        });
+
+      } finally {
+        // Clean up the temporary config file
+        try {
+          fs.unlinkSync(configFile);
+        } catch (e) {
+          console.warn('Failed to cleanup temp config file:', e);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error restoring backup:', error);
+      throw error;
+    }
+  }
 };
 
 export default serverDb;

@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Users, Shield, Key, LogOut } from "lucide-react"
+import { Users, Shield, Key, LogOut, Archive } from "lucide-react"
 import { UserManagement } from "./user-management"
 import { RoleManagement } from "./role-management"
 import { PrivilegeManagement } from "./privilege-management"
+import { DatabaseBackupRecovery } from "./database-backup-recovery"
 
 interface AdminDashboardProps {
   user: any
@@ -107,10 +108,11 @@ export function AdminDashboard({ user, onLogout }: AdminDashboardProps) {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="users">Database Users</TabsTrigger>
             <TabsTrigger value="roles">Role Management</TabsTrigger>
             <TabsTrigger value="privileges">Privilege Management</TabsTrigger>
+            <TabsTrigger value="backup">Backup & Recovery</TabsTrigger>
           </TabsList>
 
           <TabsContent value="users" className="space-y-4">
@@ -123,6 +125,10 @@ export function AdminDashboard({ user, onLogout }: AdminDashboardProps) {
 
           <TabsContent value="privileges" className="space-y-4">
             <PrivilegeManagement />
+          </TabsContent>
+
+          <TabsContent value="backup" className="space-y-4">
+            <DatabaseBackupRecovery />
           </TabsContent>
         </Tabs>
       </main>
