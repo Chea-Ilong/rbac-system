@@ -4,10 +4,10 @@ import { serverDb } from "@/lib/db-server";
 // Get all privileges for a specific role
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const roleId = parseInt(params.id, 10);
+    const roleId = parseInt((await params).id, 10);
     if (isNaN(roleId)) {
       return NextResponse.json({ message: "Invalid role ID" }, { status: 400 });
     }
@@ -22,10 +22,10 @@ export async function GET(
 // Assign privileges to a role atomically
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const roleId = parseInt(params.id, 10);
+    const roleId = parseInt((await params).id, 10);
     if (isNaN(roleId)) {
       return NextResponse.json({ success: false, message: "Invalid role ID" }, { status: 400 });
     }

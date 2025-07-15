@@ -8,9 +8,10 @@ function notifyRealTime(eventType: string, data: any, message?: string) {
 }
 
 // GET /api/users/[id] - Get database user by ID
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const dbUserId = Number.parseInt(params.id)
+    const { id } = await params
+    const dbUserId = Number.parseInt(id)
 
     if (isNaN(dbUserId)) {
       return NextResponse.json({ success: false, error: "Invalid database user ID" }, { status: 400 })
@@ -34,9 +35,10 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 }
 
 // PUT /api/users/[id] - Update database user
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const dbUserId = Number.parseInt(params.id)
+    const { id } = await params
+    const dbUserId = Number.parseInt(id)
     const body = await request.json()
     const { username, host, description } = body
 
@@ -65,9 +67,10 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 }
 
 // DELETE /api/users/[id] - Delete database user
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const dbUserId = Number.parseInt(params.id)
+    const { id } = await params
+    const dbUserId = Number.parseInt(id)
 
     if (isNaN(dbUserId)) {
       return NextResponse.json({ success: false, error: "Invalid database user ID" }, { status: 400 })

@@ -21,15 +21,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { 
-      name, 
-      description, 
-      privilege_type, 
-      target_database, 
-      target_table, 
-      mysql_privilege, 
-      is_global 
-    } = body
+    const { name, description } = body
 
     // Validate required fields
     if (!name) {
@@ -38,15 +30,10 @@ export async function POST(request: NextRequest) {
 
     await serverDb.init()
 
-    // Create new privilege with enhanced targeting
+    // Create new privilege
     const newPrivilege = await serverDb.createPrivilege({
       name: name.trim(),
       description: description?.trim() || '',
-      privilege_type: privilege_type || 'DATABASE',
-      target_database: target_database?.trim() || undefined,
-      target_table: target_table?.trim() || undefined,
-      mysql_privilege: mysql_privilege || 'SELECT',
-      is_global: is_global || false,
     })
 
     console.log(`Real-time event: created`, newPrivilege);

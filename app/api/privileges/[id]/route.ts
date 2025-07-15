@@ -2,9 +2,10 @@ import { type NextRequest, NextResponse } from "next/server"
 import { serverDb } from "@/lib/db-server"
 
 // GET /api/privileges/[id] - Get privilege by ID
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const privilegeId = Number.parseInt(params.id)
+    const { id } = await params
+    const privilegeId = Number.parseInt(id)
 
     if (isNaN(privilegeId)) {
       return NextResponse.json({ success: false, error: "Invalid privilege ID" }, { status: 400 })
@@ -28,9 +29,10 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 }
 
 // PUT /api/privileges/[id] - Update privilege by ID
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const privilegeId = Number.parseInt(params.id)
+    const { id } = await params
+    const privilegeId = Number.parseInt(id)
     if (isNaN(privilegeId)) {
       return NextResponse.json({ success: false, error: "Invalid privilege ID" }, { status: 400 })
     }
@@ -57,9 +59,10 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 }
 
 // DELETE /api/privileges/[id] - Delete privilege by ID
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const privilegeId = Number.parseInt(params.id)
+    const { id } = await params
+    const privilegeId = Number.parseInt(id)
     if (isNaN(privilegeId)) {
       return NextResponse.json({ success: false, error: "Invalid privilege ID" }, { status: 400 })
     }

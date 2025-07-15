@@ -481,16 +481,7 @@ export const db = {
     return data.data;
   },
 
-  // Database Objects operations
-  async getDatabaseObjects(): Promise<DatabaseObject[]> {
-    const response = await fetch('/api/database-objects');
-    const data = await response.json();
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to fetch database objects');
-    }
-    return data.data;
-  },
-
+  // Database operations
   async getDatabases(): Promise<DatabaseObject[]> {
     const response = await fetch('/api/databases');
     const data = await response.json();
@@ -624,6 +615,41 @@ export const db = {
       throw new Error(data.error || 'Failed to discover tables');
     }
     return data.data;
+  },
+
+  async assignScopedRoleToMultipleTables(data: {
+    dbUserId: number;
+    roleId: number;
+    scopeType: 'TABLE';
+    targetDatabase: string;
+    targetTables: string[];
+    assignedBy?: string;
+  }): Promise<{
+    assignments: ScopedRoleAssignment[];
+    errors: Array<{ table: string; error: string }>;
+    totalRequested: number;
+    successfulAssignments: number;
+    failedAssignments: number;
+  }> {
+    const response = await fetch(`/api/users/${data.dbUserId}/scoped-roles/bulk`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        roleId: data.roleId,
+        scopeType: data.scopeType,
+        targetDatabase: data.targetDatabase,
+        targetTables: data.targetTables,
+        assignedBy: data.assignedBy,
+      }),
+    });
+
+    const result = await response.json();
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to assign scoped roles to multiple tables');
+    }
+    return result.data;
   },
 };
 

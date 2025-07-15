@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Trash2, Plus, Database, Table as TableIcon, Shield, Globe, Server } from "lucide-react"
+import { Trash2, Plus, Database, Table as TableIcon, Shield, Globe, Server, RefreshCw } from "lucide-react"
 import { db, DatabaseUser, DatabaseObject, UserEffectivePrivileges, UserSpecificPrivilege, Role, ScopedRoleAssignment, DiscoveredDatabase, DiscoveredTable } from '@/lib/db'
 
 interface GranularPrivilegeManagerProps {
@@ -40,10 +40,12 @@ export function GranularPrivilegeManager({ user, onPrivilegesChange }: GranularP
   const [roles, setRoles] = useState<Role[]>([])
   const [selectedDatabase, setSelectedDatabase] = useState<string>('')
   const [selectedTable, setSelectedTable] = useState<string>('')
+  const [selectedTables, setSelectedTables] = useState<string[]>([])
   const [selectedPrivilege, setSelectedPrivilege] = useState<string>('')
   const [selectedRole, setSelectedRole] = useState<string>('')
   const [selectedScopeType, setSelectedScopeType] = useState<'GLOBAL' | 'DATABASE' | 'TABLE'>('GLOBAL')
   const [isTableLevel, setIsTableLevel] = useState(false)
+  const [isMultiTableMode, setIsMultiTableMode] = useState(false)
   
   const [userPrivileges, setUserPrivileges] = useState<UserEffectivePrivileges>({
     rolePrivileges: [],
@@ -156,8 +158,18 @@ export function GranularPrivilegeManager({ user, onPrivilegesChange }: GranularP
       return
     }
 
-    if (selectedScopeType === 'TABLE' && (!selectedDatabase || !selectedTable)) {
-      setError('Please select both database and table for table-level role assignment')
+    if (selectedScopeType === 'TABLE' && !selectedDatabase) {
+      setError('Please select a database for table-level role assignment')
+      return
+    }
+
+    if (selectedScopeType === 'TABLE' && isMultiTableMode && selectedTables.length === 0) {
+      setError('Please select at least one table for table-level role assignment')
+      return
+    }
+
+    if (selectedScopeType === 'TABLE' && !isMultiTableMode && !selectedTable) {
+      setError('Please select a table for table-level role assignment')
       return
     }
 
@@ -165,28 +177,52 @@ export function GranularPrivilegeManager({ user, onPrivilegesChange }: GranularP
       setLoading(true)
       setError('')
       
-      await db.assignScopedRoleToUser({
-        dbUserId: user.db_user_id,
-        roleId: parseInt(selectedRole),
-        scopeType: selectedScopeType,
-        targetDatabase: selectedScopeType !== 'GLOBAL' ? selectedDatabase : undefined,
-        targetTable: selectedScopeType === 'TABLE' ? selectedTable : undefined,
-        assignedBy: 'admin'
-      })
+      if (selectedScopeType === 'TABLE' && isMultiTableMode && selectedTables.length > 0) {
+        // Handle multiple table assignments using bulk API
+        const result = await db.assignScopedRoleToMultipleTables({
+          dbUserId: user.db_user_id,
+          roleId: parseInt(selectedRole),
+          scopeType: 'TABLE',
+          targetDatabase: selectedDatabase,
+          targetTables: selectedTables,
+          assignedBy: 'admin'
+        })
+        
+        if (result.failedAssignments > 0) {
+          const errorMessages = result.errors.map(e => `${e.table}: ${e.error}`).join(', ')
+          setError(`Some assignments failed: ${errorMessages}`)
+        }
+        
+        if (result.successfulAssignments > 0) {
+          setSuccess(`Successfully assigned role to ${result.successfulAssignments} table(s)${result.failedAssignments > 0 ? ` (${result.failedAssignments} failed)` : ''}`)
+        }
+      } else {
+        // Handle single assignment (global, database, or single table)
+        await db.assignScopedRoleToUser({
+          dbUserId: user.db_user_id,
+          roleId: parseInt(selectedRole),
+          scopeType: selectedScopeType,
+          targetDatabase: selectedScopeType !== 'GLOBAL' ? selectedDatabase : undefined,
+          targetTable: selectedScopeType === 'TABLE' ? selectedTable : undefined,
+          assignedBy: 'admin'
+        })
 
-      const scopeDescription = selectedScopeType === 'GLOBAL' 
-        ? 'global scope' 
-        : selectedScopeType === 'DATABASE' 
-          ? `database scope (${selectedDatabase})`
-          : `table scope (${selectedDatabase}.${selectedTable})`
+        const scopeDescription = selectedScopeType === 'GLOBAL' 
+          ? 'global scope' 
+          : selectedScopeType === 'DATABASE' 
+            ? `database scope (${selectedDatabase})`
+            : `table scope (${selectedDatabase}.${selectedTable})`
 
-      setSuccess(`Successfully assigned role with ${scopeDescription}`)
+        setSuccess(`Successfully assigned role with ${scopeDescription}`)
+      }
       
       // Reset form
       setSelectedDatabase('')
       setSelectedTable('')
+      setSelectedTables([])
       setSelectedRole('')
       setSelectedScopeType('GLOBAL')
+      setIsMultiTableMode(false)
       
       // Reload data
       await loadUserPrivileges()
@@ -426,45 +462,99 @@ export function GranularPrivilegeManager({ user, onPrivilegesChange }: GranularP
                 )}
 
                 {selectedScopeType === 'TABLE' && (
-                  <div>
-                    <label className="text-sm font-medium mb-2 block">Table</label>
-                    <Select 
-                      value={selectedTable} 
-                      onValueChange={(value) => {
-                        setSelectedTable(value)
-                        clearMessages()
-                      }}
-                      disabled={!selectedDatabase}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select table" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {discoveredTables.map((table) => (
-                          <SelectItem key={table.table_name} value={table.table_name}>
-                            <div className="flex items-center gap-2">
+                  <div className="col-span-full">
+                    <div className="flex items-center gap-4 mb-2">
+                      <label className="text-sm font-medium">Table Selection</label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setIsMultiTableMode(!isMultiTableMode)
+                          setSelectedTable('')
+                          setSelectedTables([])
+                        }}
+                      >
+                        {isMultiTableMode ? 'Single Table' : 'Multiple Tables'}
+                      </Button>
+                    </div>
+                    
+                    {isMultiTableMode ? (
+                      <div className="space-y-2">
+                        <div className="text-xs text-gray-500 mb-2">
+                          Select multiple tables for bulk role assignment:
+                        </div>
+                        <div className="max-h-40 overflow-y-auto border rounded-md p-2 space-y-1">
+                          {discoveredTables.map((table) => (
+                            <label key={table.table_name} className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedTables.includes(table.table_name)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedTables([...selectedTables, table.table_name])
+                                  } else {
+                                    setSelectedTables(selectedTables.filter(t => t !== table.table_name))
+                                  }
+                                }}
+                                className="rounded"
+                              />
                               <TableIcon className="h-4 w-4" />
-                              {table.table_name}
+                              <span className="text-sm">{table.table_name}</span>
                               <Badge variant="secondary" className="text-xs">{table.table_type}</Badge>
                               {table.engine && (
                                 <Badge variant="outline" className="text-xs">{table.engine}</Badge>
                               )}
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                            </label>
+                          ))}
+                        </div>
+                        {selectedTables.length > 0 && (
+                          <div className="text-xs text-gray-600">
+                            Selected {selectedTables.length} table(s): {selectedTables.join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <Select 
+                        value={selectedTable} 
+                        onValueChange={(value) => {
+                          setSelectedTable(value)
+                          clearMessages()
+                        }}
+                        disabled={!selectedDatabase}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select table" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {discoveredTables.map((table) => (
+                            <SelectItem key={table.table_name} value={table.table_name}>
+                              <div className="flex items-center gap-2">
+                                <TableIcon className="h-4 w-4" />
+                                {table.table_name}
+                                <Badge variant="secondary" className="text-xs">{table.table_type}</Badge>
+                                {table.engine && (
+                                  <Badge variant="outline" className="text-xs">{table.engine}</Badge>
+                                )}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                 )}
               </div>
 
               <Button 
                 onClick={handleAssignScopedRole} 
-                disabled={loading || !selectedRole || (selectedScopeType !== 'GLOBAL' && !selectedDatabase) || (selectedScopeType === 'TABLE' && !selectedTable)}
+                disabled={loading || !selectedRole || (selectedScopeType !== 'GLOBAL' && !selectedDatabase) || (selectedScopeType === 'TABLE' && !isMultiTableMode && !selectedTable) || (selectedScopeType === 'TABLE' && isMultiTableMode && selectedTables.length === 0)}
                 className="w-full"
               >
                 <Plus className="h-4 w-4 mr-2" />
-                Assign Role with Scope
+                {selectedScopeType === 'TABLE' && isMultiTableMode && selectedTables.length > 1 
+                  ? `Assign Role to ${selectedTables.length} Tables` 
+                  : 'Assign Role with Scope'}
               </Button>
             </TabsContent>
 

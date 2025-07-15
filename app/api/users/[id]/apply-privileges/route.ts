@@ -2,9 +2,10 @@ import { type NextRequest, NextResponse } from "next/server"
 import { serverDb as db } from "@/lib/db-server"
 
 // POST /api/users/[id]/apply-privileges - Apply privileges to database user
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const dbUserId = Number.parseInt(params.id)
+    const { id } = await params
+    const dbUserId = Number.parseInt(id)
     const body = await request.json()
     const { databaseName } = body
 

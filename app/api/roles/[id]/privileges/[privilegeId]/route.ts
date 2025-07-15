@@ -4,11 +4,11 @@ import { serverDb } from "@/lib/db-server";
 // Remove a privilege from a role
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string; privilegeId: string } }
+  { params }: { params: Promise<{ id: string; privilegeId: string }> }
 ) {
   try {
-    const roleId = parseInt(params.id, 10);
-    const privilegeId = parseInt(params.privilegeId, 10);
+    const roleId = parseInt((await params).id, 10);
+    const privilegeId = parseInt((await params).privilegeId, 10);
 
     if (isNaN(roleId) || isNaN(privilegeId)) {
       return NextResponse.json(

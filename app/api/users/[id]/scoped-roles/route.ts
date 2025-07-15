@@ -3,10 +3,10 @@ import { serverDb } from '@/lib/db-server';
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const userId = parseInt(params.id);
+    const userId = parseInt((await params).id);
     if (isNaN(userId)) {
       return NextResponse.json(
         { success: false, error: 'Invalid user ID' },
@@ -72,10 +72,10 @@ export async function POST(
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const userId = parseInt(params.id);
+    const userId = parseInt((await params).id);
     if (isNaN(userId)) {
       return NextResponse.json(
         { success: false, error: 'Invalid user ID' },

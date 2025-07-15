@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serverDb } from "@/lib/db-server";
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const privilegeId = parseInt(params.id, 10);
+    const privilegeId = parseInt((await params).id, 10);
     const roles = await serverDb.getRolesForPrivilege(privilegeId);
     return NextResponse.json(roles);
   } catch (error) {
@@ -12,9 +12,9 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   }
 }
 
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const privilegeId = parseInt(params.id, 10);
+    const privilegeId = parseInt((await params).id, 10);
     const { roleIds } = await request.json();
     await serverDb.assignRolesToPrivilege(privilegeId, roleIds);
     return NextResponse.json({ message: "Roles assigned successfully" });

@@ -2,9 +2,10 @@ import { type NextRequest, NextResponse } from "next/server"
 import { serverDb } from "@/lib/db-server"
 
 // GET /api/roles/[id] - Get role by ID
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const roleId = Number.parseInt(params.id)
+    const { id } = await params
+    const roleId = Number.parseInt(id)
 
     if (isNaN(roleId)) {
       return NextResponse.json({ success: false, error: "Invalid role ID" }, { status: 400 })
@@ -28,9 +29,10 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 }
 
 // PUT /api/roles/[id] - Update role
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const roleId = Number.parseInt(params.id)
+    const { id } = await params
+    const roleId = Number.parseInt(id)
     const body = await request.json()
     const { name, description } = body
 
@@ -57,9 +59,10 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 }
 
 // DELETE /api/roles/[id] - Delete role
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const roleId = Number.parseInt(params.id)
+    const { id } = await params
+    const roleId = Number.parseInt(id)
 
     if (isNaN(roleId)) {
       return NextResponse.json({ success: false, error: "Invalid role ID" }, { status: 400 })
