@@ -34,8 +34,8 @@ CREATE TABLE `comments` (
 LOCK TABLES `comments` WRITE;
 /*!40000 ALTER TABLE `comments` DISABLE KEYS */;
 INSERT INTO `comments` VALUES
-(1,1,2,'Thanks for the update!','2025-07-15 19:00:25'),
-(2,2,3,'Looking forward to next week.','2025-07-15 19:00:25');
+(1,1,2,'Thanks for the update!','2025-07-19 18:39:38'),
+(2,2,3,'Looking forward to next week.','2025-07-19 18:39:38');
 /*!40000 ALTER TABLE `comments` ENABLE KEYS */;
 UNLOCK TABLES;
 DROP TABLE IF EXISTS `posts`;
@@ -56,8 +56,8 @@ CREATE TABLE `posts` (
 LOCK TABLES `posts` WRITE;
 /*!40000 ALTER TABLE `posts` DISABLE KEYS */;
 INSERT INTO `posts` VALUES
-(1,1,'Welcome to the System','This is our first post!','2025-07-15 19:00:25'),
-(2,2,'Weekly Update','Here is what happened this week.','2025-07-15 19:00:25');
+(1,1,'Welcome to the System','This is our first post!','2025-07-19 18:39:38'),
+(2,2,'Weekly Update','Here is what happened this week.','2025-07-19 18:39:38');
 /*!40000 ALTER TABLE `posts` ENABLE KEYS */;
 UNLOCK TABLES;
 DROP TABLE IF EXISTS `users`;
@@ -77,9 +77,9 @@ CREATE TABLE `users` (
 LOCK TABLES `users` WRITE;
 /*!40000 ALTER TABLE `users` DISABLE KEYS */;
 INSERT INTO `users` VALUES
-(1,'Alice','alice@example.com','admin','2025-07-15 19:00:25'),
-(2,'Bob','bob@example.com','editor','2025-07-15 19:00:25'),
-(3,'Charlie','charlie@example.com','viewer','2025-07-15 19:00:25');
+(1,'Alice','alice@example.com','admin','2025-07-19 18:39:38'),
+(2,'Bob','bob@example.com','editor','2025-07-19 18:39:38'),
+(3,'Charlie','charlie@example.com','viewer','2025-07-19 18:39:38');
 /*!40000 ALTER TABLE `users` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;

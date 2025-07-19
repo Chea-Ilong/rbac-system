@@ -51,7 +51,7 @@ export function LoginForm({ onLogin }: LoginFormProps) {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="admin"
+                placeholder=""
                 required
               />
             </div>
@@ -62,7 +62,7 @@ export function LoginForm({ onLogin }: LoginFormProps) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="admin123"
+                placeholder=""
                 required
               />
             </div>
@@ -75,13 +75,13 @@ export function LoginForm({ onLogin }: LoginFormProps) {
               Login
             </Button>
           </form>
-          <div className="mt-4 text-sm text-gray-600">
+          {/* <div className="mt-4 text-sm text-gray-600">
             <p>
               <strong>Demo Credentials:</strong>
             </p>
             <p>Username: admin</p>
             <p>Password: admin123</p>
-          </div>
+          </div> */}
         </CardContent>
       </Card>
     </div>

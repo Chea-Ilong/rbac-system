@@ -1,5 +1,3 @@
--- Fix DatabaseUserRoles table to allow multiple scoped assignments
--- This script modifies the table to support multiple assignments of the same role to the same user with different scopes
 
 USE rbac_system;
 

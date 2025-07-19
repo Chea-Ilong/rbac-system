@@ -328,7 +328,7 @@ export function UserManagement() {
               <TableHead>Username</TableHead>
               <TableHead>Host</TableHead>
               <TableHead>Description</TableHead>
-              <TableHead>Roles</TableHead>
+              <TableHead> </TableHead>
               <TableHead>Created</TableHead>
               <TableHead>Actions</TableHead>
             </TableRow>
@@ -341,13 +341,13 @@ export function UserManagement() {
                 <TableCell>{user.host}</TableCell>
                 <TableCell>{user.description || '-'}</TableCell>
                 <TableCell>
-                  <div className="flex flex-wrap gap-1">
+                  {/* <div className="flex flex-wrap gap-1">
                     {getUserRoles(user.db_user_id).map((role) => (
                       <Badge key={role.role_id} variant="secondary">
                         {role.name}
                       </Badge>
                     ))}
-                  </div>
+                  </div> */}
                 </TableCell>
                 <TableCell>{new Date(user.created_at).toLocaleDateString()}</TableCell>
                 <TableCell>
@@ -355,9 +355,9 @@ export function UserManagement() {
                     <Button variant="outline" size="sm" onClick={() => openEditDialog(user)}>
                       <Edit className="h-4 w-4" />
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => openAssignRoleDialog(user)}>
+                    {/* <Button variant="outline" size="sm" onClick={() => openAssignRoleDialog(user)}>
                       <UserPlus className="h-4 w-4" />
-                    </Button>
+                    </Button> */}
                     <Button variant="outline" size="sm" onClick={() => openPrivilegeManagerDialog(user)}>
                       <Settings className="h-4 w-4" />
                     </Button>
@@ -367,12 +367,12 @@ export function UserManagement() {
                     <Button variant="outline" size="sm" onClick={() => handleApplyPrivileges(user.db_user_id)}>
                       <Shield className="h-4 w-4" />
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => {
+                    {/* <Button variant="outline" size="sm" onClick={() => {
                       setSelectedUser(user)
                       setIsPrivilegeManagerOpen(true)
                     }}>
                       <Settings className="h-4 w-4" />
-                    </Button>
+                    </Button> */}
                   </div>
                 </TableCell>
               </TableRow>
